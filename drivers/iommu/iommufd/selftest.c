@@ -3,6 +3,11 @@
  *
  * Kernel side components to support tools/testing/selftests/iommu
  */
+#include <linux/slab.h>
+#include <linux/iommu.h>
+#include <linux/xarray.h>
+#include <linux/file.h>
+#include <linux/debugfs.h>
 #include <linux/anon_inodes.h>
 #include <linux/debugfs.h>
 #include <linux/fault-inject.h>
