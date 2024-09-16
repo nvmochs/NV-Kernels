@@ -178,7 +178,7 @@ CONFIG_VFIO_CONTAINER                           policy<{'arm64': 'n'}>
 CONFIG_VFIO_IOMMU_TYPE1                         policy<{'arm64': '-'}>
 CONFIG_NVGRACE_GPU_VFIO_PCI                     policy<{'arm64': 'm'}>
 CONFIG_NVGRACE_EGM                              policy<{'arm64': 'm'}>
-CONFIG_IOMMU_IOPF                               policy<{'arm64': 'y'}>
+CONFIG_IOMMU_IOPF                               policy<{'arm64': 'y', 'amd64': 'y'}>
 CONFIG_SCSI_UFS_FAULT_INJECTION                 policy<{'arm64': 'n'}>
 CONFIG_FAILSLAB                                 policy<{'arm64': 'n'}>
 CONFIG_FAIL_PAGE_ALLOC                          policy<{'arm64': 'n'}>
