@@ -701,11 +701,11 @@ bad_req:
 			goto bad_req;
 		}
 
-		intel_svm_prq_report(iommu, &pdev->dev, req);
-		trace_prq_report(iommu, &pdev->dev, req->qw_0, req->qw_1,
+		intel_svm_prq_report(iommu, dev, req);
+		trace_prq_report(iommu, dev, req->qw_0, req->qw_1,
 				 req->priv_data[0], req->priv_data[1],
 				 iommu->prq_seq_number++);
-		pci_dev_put(pdev);
+		mutex_unlock(&iommu->iopf_lock);
 prq_advance:
 		head = (head + sizeof(*req)) & PRQ_RING_MASK;
 	}
