@@ -24,7 +24,6 @@ struct egm_region {
 	struct device device;
 	struct cdev cdev;
 	struct kref refcount;
-	struct pci_dev *pdev;
 	DECLARE_HASHTABLE(htbl, 0x10);
 #ifdef CONFIG_MEMORY_FAILURE
 	struct pfn_address_space pfn_address_space;
@@ -244,35 +243,35 @@ static const struct file_operations file_ops = {
 	.unlocked_ioctl = nvgrace_egm_ioctl,
 };
 
-static void pci_egm_link_remove(struct egm_region *region)
+static void pci_egm_link_remove(struct pci_dev *pdev, struct egm_region *region)
 {
-	sysfs_remove_link(&region->pdev->dev.kobj, dev_name(&region->device));
-	sysfs_remove_link(&region->device.kobj, dev_name(&region->pdev->dev));
+	sysfs_remove_link(&pdev->dev.kobj, dev_name(&region->device));
+	sysfs_remove_link(&region->device.kobj, dev_name(&pdev->dev));
 }
 
-static int pci_egm_link_create(struct egm_region *region)
+static int pci_egm_link_create(struct pci_dev *pdev, struct egm_region *region)
 {
 	int rc;
 
-	rc = sysfs_create_link(&region->pdev->dev.kobj,
+	rc = sysfs_create_link(&pdev->dev.kobj,
 			       &region->device.kobj,
 			       dev_name(&region->device));
 	if (rc)
 		goto err;
 
 	rc = sysfs_create_link(&region->device.kobj,
-			       &region->pdev->dev.kobj,
-			       dev_name(&region->pdev->dev));
+			       &pdev->dev.kobj,
+			       dev_name(&pdev->dev));
 	if (rc)
 		goto err;
 
 	return 0;
 err:
-	pci_egm_link_remove(region);
+	pci_egm_link_remove(pdev, region);
 	return rc;
 }
 
-static int setup_egm_chardev(struct egm_region *region)
+static int setup_egm_chardev(struct pci_dev *pdev, struct egm_region *region)
 {
 	int ret;
 
@@ -296,7 +295,7 @@ static int setup_egm_chardev(struct egm_region *region)
 	if (ret)
 		return ret;
 
-	ret = pci_egm_link_create(region);
+	ret = pci_egm_link_create(pdev, region);
 	if (ret)
 		goto err;
 
@@ -394,6 +393,9 @@ int register_egm_node(struct pci_dev *pdev)
 
 	list_for_each_entry(region, &egm_list, list) {
 		if (region->egmphys == egmphys) {
+			ret = pci_egm_link_create(pdev, region);
+			if (ret)
+				return ret;
 			kref_get(&region->refcount);
 			return 0;
 		}
@@ -406,7 +408,6 @@ int register_egm_node(struct pci_dev *pdev)
 	region->egmphys = egmphys;
 	region->egmlength = egmlength;
 	region->egmpxm = egmpxm;
-	region->pdev = pdev;
 
 	hash_init(region->htbl);
 	kref_init(&region->refcount);
@@ -414,7 +415,7 @@ int register_egm_node(struct pci_dev *pdev)
 
 	nvgrace_egm_fetch_bad_pages(pdev, region);
 
-	ret = setup_egm_chardev(region);
+	ret = setup_egm_chardev(pdev, region);
 	if (ret)
 		goto err;
 
@@ -429,7 +430,6 @@ EXPORT_SYMBOL_GPL(register_egm_node);
 
 static void destroy_egm_chardev(struct egm_region *region)
 {
-	pci_egm_link_remove(region);
 	cdev_device_del(&region->cdev, &region->device);
 }
 
@@ -461,8 +461,10 @@ void unregister_egm_node(struct pci_dev *pdev)
 		return;
 
 	list_for_each_entry_safe(region, temp_region, &egm_list, list) {
-		if (egmpxm == region->egmpxm)
+		if (egmpxm == region->egmpxm) {
+			pci_egm_link_remove(pdev, region);
 			kref_put(&region->refcount, egm_region_release);
+		}
 	}
 }
 EXPORT_SYMBOL_GPL(unregister_egm_node);
