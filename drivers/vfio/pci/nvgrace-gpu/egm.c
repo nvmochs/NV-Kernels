@@ -23,6 +23,7 @@ struct egm_region {
 	size_t egmlength;
 	struct device device;
 	struct cdev cdev;
+	struct kref refcount;
 	struct pci_dev *pdev;
 	DECLARE_HASHTABLE(htbl, 0x10);
 #ifdef CONFIG_MEMORY_FAILURE
@@ -392,8 +393,10 @@ int register_egm_node(struct pci_dev *pdev)
 		return ret;
 
 	list_for_each_entry(region, &egm_list, list) {
-		if (region->egmphys == egmphys)
+		if (region->egmphys == egmphys) {
+			kref_get(&region->refcount);
 			return 0;
+		}
 	}
 
 	region = kvzalloc(sizeof(*region), GFP_KERNEL);
@@ -406,6 +409,7 @@ int register_egm_node(struct pci_dev *pdev)
 	region->pdev = pdev;
 
 	hash_init(region->htbl);
+	kref_init(&region->refcount);
 	atomic_set(&region->open_count, 0);
 
 	nvgrace_egm_fetch_bad_pages(pdev, region);
@@ -429,12 +433,26 @@ static void destroy_egm_chardev(struct egm_region *region)
 	cdev_device_del(&region->cdev, &region->device);
 }
 
-void unregister_egm_node(struct pci_dev *pdev)
+static void egm_region_release(struct kref *ref)
 {
-	struct egm_region *region, *temp_region;
+	struct egm_region *region = container_of(ref, struct egm_region, refcount);
 	struct h_node *cur_page;
 	unsigned long bkt;
 	struct hlist_node *temp_node;
+
+	hash_for_each_safe(region->htbl, bkt, temp_node, cur_page, node) {
+		hash_del(&cur_page->node);
+		vfree(cur_page);
+	}
+
+	destroy_egm_chardev(region);
+	list_del(&region->list);
+	kfree(region);
+}
+
+void unregister_egm_node(struct pci_dev *pdev)
+{
+	struct egm_region *region, *temp_region;
 	u64 egmphys, egmlength, egmpxm;
 	int ret;
 
@@ -443,16 +461,8 @@ void unregister_egm_node(struct pci_dev *pdev)
 		return;
 
 	list_for_each_entry_safe(region, temp_region, &egm_list, list) {
-		if (egmpxm == region->egmpxm) {
-			hash_for_each_safe(region->htbl, bkt, temp_node, cur_page, node) {
-				hash_del(&cur_page->node);
-				vfree(cur_page);
-			}
-
-			destroy_egm_chardev(region);
-			list_del(&region->list);
-			kfree(region);
-		}
+		if (egmpxm == region->egmpxm)
+			kref_put(&region->refcount, egm_region_release);
 	}
 }
 EXPORT_SYMBOL_GPL(unregister_egm_node);
