@@ -393,6 +393,34 @@ int register_egm_node(struct pci_dev *pdev)
 
 	list_for_each_entry(region, &egm_list, list) {
 		if (region->egmphys == egmphys) {
+			/* FIXME:
+			 * Is this call needed here as well? It looks like each
+			 * GPU can have its own "egm-retired-pages-data-base".
+			 *
+			 * Example from Bianca (2 CPU / 4 GPU):
+			 * GPU0:
+			 * 	nvidia,egm-base-pa: 0x80000000
+			 *      nvidia,egm-size:    0x0000006FC0000000
+			 *      nvidia,egm-pxm:     0x04
+			 *      nvidia,egm-retired-pages-data-base: 0x000000786BDD0000
+			 * GPU1:
+			 * 	nvidia,egm-base-pa: 0x0000100080000000
+			 *      nvidia,egm-size:    0x0000006FC0000000
+			 *      nvidia,egm-pxm:     0x05
+			 *      nvidia,egm-retired-pages-data-base: 0x000000786BDB0000
+			 * GPU2:
+			 * 	nvidia,egm-base-pa: 0x80000000
+			 *      nvidia,egm-size:    0x0000006FC0000000
+			 *      nvidia,egm-pxm:     0x04
+			 *      nvidia,egm-retired-pages-data-base: 0x000000786BDE0000
+			 * GPU3:
+			 * 	nvidia,egm-base-pa: 0x0000100080000000
+			 *      nvidia,egm-size:    0x0000006FC0000000
+			 *      nvidia,egm-pxm:     0x05
+			 *      nvidia,egm-retired-pages-data-base: 0x000000786BDC0000
+			 *
+			 * nvgrace_egm_fetch_bad_pages(pdev, region);
+			 */
 			ret = pci_egm_link_create(pdev, region);
 			if (ret)
 				return ret;
