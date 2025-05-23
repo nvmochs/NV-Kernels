@@ -320,13 +320,32 @@ nvgrace_gpu_ioctl_get_region_info(struct vfio_device *core_vdev,
 static long nvgrace_gpu_ioctl(struct vfio_device *core_vdev,
 			      unsigned int cmd, unsigned long arg)
 {
+	struct nvgrace_gpu_pci_core_device *nvdev =
+		container_of(core_vdev, struct nvgrace_gpu_pci_core_device,
+			     core_device.vdev);
+
 	switch (cmd) {
 	case VFIO_DEVICE_GET_REGION_INFO:
 		return nvgrace_gpu_ioctl_get_region_info(core_vdev, arg);
 	case VFIO_DEVICE_IOEVENTFD:
 		return -ENOTTY;
 	case VFIO_DEVICE_RESET:
+	case VFIO_DEVICE_PCI_HOT_RESET:
 		nvgrace_gpu_init_fake_bar_emu_regs(core_vdev);
+		/*
+		 * Due to a HW bug, speculative prefetches to GPU memory
+		 * can cause harmless corrected RAS events to be logged.
+		 * Removing the mappings will prevent this.
+		 *
+		 * During device reset, the GPU is safely disconnected
+		 * to the CPU and access to the BAR will be immediately
+		 * returned preventing machine check.
+		 */
+		down_write(&nvdev->core_device.memory_lock);
+		unmap_mapping_range(core_vdev->inode->i_mapping,
+				    nvdev->usemem.memphys,
+				    nvdev->usemem.memlength, true);
+		up_write(&nvdev->core_device.memory_lock);
 		fallthrough;
 	default:
 		return vfio_pci_core_ioctl(core_vdev, cmd, arg);
