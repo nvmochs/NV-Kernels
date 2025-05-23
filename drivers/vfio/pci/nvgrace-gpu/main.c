@@ -130,6 +130,48 @@ static void nvgrace_gpu_close_device(struct vfio_device *core_vdev)
 	vfio_pci_core_close_device(core_vdev);
 }
 
+static vm_fault_t nvgrace_gpu_vfio_pci_fault(struct vm_fault *vmf)
+{
+	unsigned long mem_offset = vmf->pgoff - vmf->vma->vm_pgoff;
+	struct vfio_device *core_vdev;
+	struct nvgrace_gpu_pci_core_device *nvdev;
+	struct vm_area_struct *vma = vmf->vma;
+	struct mem_region *memregion = NULL;
+
+	if (!(vmf->vma->vm_file))
+		goto error_exit;
+
+	core_vdev = vfio_device_from_file(vmf->vma->vm_file);
+
+	if (!core_vdev)
+		goto error_exit;
+
+	nvdev = container_of(core_vdev,
+			     struct nvgrace_gpu_pci_core_device, core_device.vdev);
+
+	if (vmf->pgoff >= PFN_DOWN(nvdev->usemem.memphys) &&
+	    vmf->pgoff < PFN_DOWN(nvdev->usemem.memphys + nvdev->usemem.memlength))
+		memregion = nvgrace_gpu_memregion(USEMEM_REGION_INDEX, nvdev);
+
+	if (vmf->pgoff >= PFN_DOWN(nvdev->resmem.memphys) &&
+	    vmf->pgoff < PFN_DOWN(nvdev->resmem.memphys + nvdev->resmem.memlength))
+		memregion = nvgrace_gpu_memregion(RESMEM_REGION_INDEX, nvdev);
+
+	if (memregion) {
+		down_read(&nvdev->core_device.memory_lock);
+		vmf_insert_pfn(vmf->vma, vma->vm_start + (mem_offset << PAGE_SHIFT),
+			       PHYS_PFN(memregion->memphys) + mem_offset);
+		up_read(&nvdev->core_device.memory_lock);
+	}
+
+error_exit:
+	return VM_FAULT_NOPAGE;
+}
+
+static const struct vm_operations_struct nvgrace_gpu_vfio_pci_mmap_ops = {
+	.fault = nvgrace_gpu_vfio_pci_fault,
+};
+
 static int nvgrace_gpu_mmap(struct vfio_device *core_vdev,
 			    struct vm_area_struct *vma)
 {
@@ -140,7 +182,6 @@ static int nvgrace_gpu_mmap(struct vfio_device *core_vdev,
 	unsigned long start_pfn;
 	u64 req_len, pgoff, end;
 	unsigned int index;
-	int ret = 0;
 
 	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
 
@@ -168,6 +209,8 @@ static int nvgrace_gpu_mmap(struct vfio_device *core_vdev,
 	if (end > memregion->memlength)
 		return -EINVAL;
 
+	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+
 	/*
 	 * The carved out region of the device memory needs the NORMAL_NC
 	 * property. Communicate as such to the hypervisor.
@@ -184,23 +227,8 @@ static int nvgrace_gpu_mmap(struct vfio_device *core_vdev,
 		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
 	}
 
-	/*
-	 * Perform a PFN map to the memory and back the device BAR by the
-	 * GPU memory.
-	 *
-	 * The available GPU memory size may not be power-of-2 aligned. The
-	 * remainder is only backed by vfio_device_ops read/write handlers.
-	 *
-	 * During device reset, the GPU is safely disconnected to the CPU
-	 * and access to the BAR will be immediately returned preventing
-	 * machine check.
-	 */
-	ret = remap_pfn_range(vma, vma->vm_start, start_pfn,
-			      req_len, vma->vm_page_prot);
-	if (ret)
-		return ret;
-
 	vma->vm_pgoff = start_pfn;
+	vma->vm_ops = &nvgrace_gpu_vfio_pci_mmap_ops;
 
 	return 0;
 }
