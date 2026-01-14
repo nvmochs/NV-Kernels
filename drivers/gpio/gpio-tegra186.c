@@ -7,6 +7,7 @@
  */
 
 #include <linux/gpio/driver.h>
+#include <linux/acpi.h>
 #include <linux/hte.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -856,6 +857,8 @@ static int tegra186_gpio_probe(struct platform_device *pdev)
 	struct device_node *np;
 	struct resource *res;
 	char **names;
+	const char *acpi_uid = NULL;
+	char *instance_prefix = NULL;
 	int err;
 
 	gpio = devm_kzalloc(&pdev->dev, sizeof(*gpio), GFP_KERNEL);
@@ -936,14 +939,32 @@ static int tegra186_gpio_probe(struct platform_device *pdev)
 	if (!names)
 		return -ENOMEM;
 
+	/*
+	 * If running under ACPI and the SoC defines a GPIO name prefix
+	 * (e.g. "COMPUTE" / "SYSTEM" on Tegra410), prepend the ACPI _UID
+	 * to make per-instance line names unique across multiple devices.
+	 */
+#if IS_ENABLED(CONFIG_ACPI)
+	if (ACPI_COMPANION(&pdev->dev) && gpio->soc->prefix) {
+		acpi_uid = acpi_device_uid(ACPI_COMPANION(&pdev->dev));
+		if (acpi_uid && acpi_uid[0]) {
+			instance_prefix = devm_kasprintf(gpio->gpio.parent, GFP_KERNEL,
+							 "%s-%s", acpi_uid, gpio->soc->prefix);
+			if (!instance_prefix)
+				return -ENOMEM;
+		}
+	}
+#endif
+
 	for (i = 0, offset = 0; i < gpio->soc->num_ports; i++) {
 		const struct tegra_gpio_port *port = &gpio->soc->ports[i];
 		char *name;
 
 		for (j = 0; j < port->pins; j++) {
-			if (gpio->soc->prefix)
+			const char *prefix = instance_prefix ? instance_prefix : gpio->soc->prefix;
+			if (prefix)
 				name = devm_kasprintf(gpio->gpio.parent, GFP_KERNEL, "%s-P%s.%02x",
-						      gpio->soc->prefix, port->name, j);
+						      prefix, port->name, j);
 			else
 				name = devm_kasprintf(gpio->gpio.parent, GFP_KERNEL, "P%s.%02x",
 						      port->name, j);
