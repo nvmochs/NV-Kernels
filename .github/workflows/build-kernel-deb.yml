@@ -1,0 +1,81 @@
+name: Build Kernel .deb Packages
+
+on:
+  push:
+    branches:
+      - linux-nvidia-6.18
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Kernel (${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: 4k
+            base_config: arch/arm64/configs/full.config
+            localversion: -nvidia
+          - variant: 64k
+            base_config: arch/arm64/configs/full-64k.config
+            localversion: -nvidia-64k
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            libncurses-dev \
+            dwarves \
+            pahole \
+            rsync \
+            debhelper \
+            dpkg-dev \
+            fakeroot \
+            cpio \
+            kmod \
+            python3 \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
+      - name: Generate kernel config (${{ matrix.variant }})
+        run: |
+          bash scripts/kconfig/merge_config.sh \
+            ${{ matrix.base_config }} \
+            arch/arm64/configs/nvidia.config
+
+      - name: Build .deb packages (${{ matrix.variant }})
+        run: |
+          make -j$(nproc) bindeb-pkg \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            LOCALVERSION=${{ matrix.localversion }} \
+            KDEB_PKGVERSION=$(make kernelversion)-1
+
+      - name: Collect .deb packages
+        run: |
+          mkdir -p deb-packages
+          mv ../*.deb deb-packages/ 2>/dev/null || true
+          ls -lh deb-packages/
+
+      - name: Upload .deb packages (${{ matrix.variant }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-debs-${{ matrix.variant }}-${{ github.sha }}
+          path: deb-packages/*.deb
+          retention-days: 30
+          if-no-files-found: error
