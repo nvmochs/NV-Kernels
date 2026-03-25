@@ -60,6 +60,7 @@ jobs:
             arch/arm64/configs/nvidia.config
           ./scripts/config --set-str CONFIG_SYSTEM_TRUSTED_KEYS ""
           ./scripts/config --set-str CONFIG_SYSTEM_REVOCATION_KEYS ""
+          ./scripts/config --enable CONFIG_QCOM_TZMEM
 
       - name: Build .deb packages (${{ matrix.variant }})
         run: |
@@ -81,5 +82,5 @@ jobs:
         with:
           name: kernel-debs-${{ matrix.variant }}-${{ github.sha }}
           path: deb-packages/*.deb
-          retention-days: 30
+          retention-days: 90
           if-no-files-found: error
