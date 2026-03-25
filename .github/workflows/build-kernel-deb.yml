@@ -42,6 +42,7 @@ jobs:
             libncurses-dev \
             dwarves \
             pahole \
+            libdw-dev \
             rsync \
             debhelper \
             dpkg-dev \
