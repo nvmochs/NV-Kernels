@@ -24,6 +24,14 @@ jobs:
             localversion: -nvidia-64k
 
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/lib/jvm /usr/share/swift
+          sudo docker image prune --all --force || true
+          df -h
+
       - name: Checkout source
         uses: actions/checkout@v4
         with:
@@ -66,6 +74,8 @@ jobs:
           make -j$(nproc) bindeb-pkg \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
+            HOSTCC=gcc \
+            HOSTCXX=g++ \
             LOCALVERSION=${{ matrix.localversion }} \
             KDEB_PKGVERSION=$(make kernelversion)-1 \
             DPKG_FLAGS=-d
