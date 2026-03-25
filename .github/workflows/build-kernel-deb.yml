@@ -64,7 +64,8 @@ jobs:
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             LOCALVERSION=${{ matrix.localversion }} \
-            KDEB_PKGVERSION=$(make kernelversion)-1
+            KDEB_PKGVERSION=$(make kernelversion)-1 \
+            DPKG_FLAGS=-d
 
       - name: Collect .deb packages
         run: |
