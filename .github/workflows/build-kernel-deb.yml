@@ -60,7 +60,8 @@ jobs:
             arch/arm64/configs/nvidia.config
           ./scripts/config --set-str CONFIG_SYSTEM_TRUSTED_KEYS ""
           ./scripts/config --set-str CONFIG_SYSTEM_REVOCATION_KEYS ""
-          ./scripts/config --enable CONFIG_QCOM_TZMEM
+          ./scripts/config --enable CONFIG_QCOM_TZMEM_MODE_GENERIC
+          ./scripts/config --disable CONFIG_QCOM_TZMEM_MODE_SHMBRIDGE
 
       - name: Build .deb packages (${{ matrix.variant }})
         run: |
