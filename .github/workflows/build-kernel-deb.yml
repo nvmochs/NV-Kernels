@@ -76,6 +76,7 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             HOSTCC=gcc \
             HOSTCXX=g++ \
+            HOSTLD=ld \
             LOCALVERSION=${{ matrix.localversion }} \
             KDEB_PKGVERSION=$(make kernelversion)-1 \
             DPKG_FLAGS=-d
