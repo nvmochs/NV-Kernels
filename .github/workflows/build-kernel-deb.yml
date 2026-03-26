@@ -39,6 +39,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -51,6 +52,10 @@ jobs:
             dwarves \
             pahole \
             libdw-dev \
+            libdw-dev:arm64 \
+            libelf-dev:arm64 \
+            zlib1g-dev:arm64 \
+            libssl-dev:arm64 \
             rsync \
             debhelper \
             dpkg-dev \
@@ -76,7 +81,6 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             HOSTCC=gcc \
             HOSTCXX=g++ \
-            HOSTLD=ld \
             LOCALVERSION=${{ matrix.localversion }} \
             KDEB_PKGVERSION=$(make kernelversion)-1 \
             DPKG_FLAGS=-d
