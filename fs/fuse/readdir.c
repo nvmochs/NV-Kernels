@@ -348,15 +348,18 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 	struct fuse_args *args = &ap->args;
 	struct page **pages __free(kvfree) = NULL;
 	void *buf;
-	size_t max_bufsize = min3((size_t)fc->max_pages << PAGE_SHIFT,
-				  (size_t)fc->max_read,
-				  (size_t)fc->max_write);
+	size_t max_bufsize = (size_t)fc->max_pages << PAGE_SHIFT;
 	size_t bufsize = clamp_t(size_t, ctx->count, PAGE_SIZE, max_bufsize);
 	unsigned int nr_pages = DIV_ROUND_UP(bufsize, PAGE_SIZE);
 	u64 attr_version = 0, evict_ctr = 0;
 	bool locked;
 	unsigned int nr_alloc;
 	unsigned int i;
+
+	if (ctx->count == INT_MAX)
+		pr_err("matt readdir: uncapped debug count=%d page_size=%lu max_pages=%u max_read=%u max_write=%u max_bufsize=%zu bufsize=%zu nr_pages=%u\n",
+		       ctx->count, PAGE_SIZE, fc->max_pages, fc->max_read,
+		       fc->max_write, max_bufsize, bufsize, nr_pages);
 
 	pages = kvcalloc(nr_pages, sizeof(*pages), GFP_KERNEL);
 	if (!pages)
@@ -368,6 +371,8 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 		goto out;
 	}
 	if (nr_alloc < nr_pages) {
+		pr_err("matt readdir: partial bulk alloc nr_alloc=%u nr_pages=%u old_bufsize=%zu\n",
+		       nr_alloc, nr_pages, bufsize);
 		nr_pages = nr_alloc;
 		bufsize = (size_t)nr_pages << PAGE_SHIFT;
 	}
@@ -396,7 +401,13 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 		fuse_read_args_fill(&ia, file, ctx->pos, bufsize, FUSE_READDIR);
 	}
 	locked = fuse_lock_inode(inode);
+	if (ctx->count == INT_MAX)
+		pr_err("matt readdir: before request opcode=%u out_pages=%u out_size=%u num_folios=%u bufsize=%zu\n",
+		       args->opcode, args->out_pages, args->out_args[0].size,
+		       ap->num_folios, bufsize);
 	res = fuse_simple_request(fm, args);
+	if (ctx->count == INT_MAX)
+		pr_err("matt readdir: request result=%zd\n", res);
 	fuse_unlock_inode(inode, locked);
 	if (res >= 0) {
 		if (!res) {

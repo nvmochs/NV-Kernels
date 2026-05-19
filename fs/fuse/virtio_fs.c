@@ -706,9 +706,22 @@ static int copy_args_to_argbuf(struct fuse_req *req, gfp_t gfp)
 	len = fuse_len_args(num_in, (struct fuse_arg *) args->in_args) +
 	      fuse_len_args(num_out, args->out_args);
 
+	if (req->in.h.opcode == FUSE_READDIR ||
+	    req->in.h.opcode == FUSE_READDIRPLUS)
+		pr_err("matt virtiofs: copy_args_to_argbuf opcode=%u num_in=%u num_out=%u len=%u in_pages=%u out_pages=%u out_size=%u gfp=0x%x\n",
+		       req->in.h.opcode, num_in, num_out, len, args->in_pages,
+		       args->out_pages,
+		       args->out_numargs ? args->out_args[args->out_numargs - 1].size : 0,
+		       (__force unsigned int)gfp);
+
 	req->argbuf = kmalloc(len, gfp);
-	if (!req->argbuf)
+	if (!req->argbuf) {
+		if (req->in.h.opcode == FUSE_READDIR ||
+		    req->in.h.opcode == FUSE_READDIRPLUS)
+			pr_err("matt virtiofs: copy_args_to_argbuf kmalloc failed len=%u gfp=0x%x\n",
+			       len, (__force unsigned int)gfp);
 		return -ENOMEM;
+	}
 
 	for (i = 0; i < num_in; i++) {
 		memcpy(req->argbuf + offset,
@@ -789,6 +802,13 @@ static void virtio_fs_request_complete(struct fuse_req *req,
 	struct folio *folio;
 
 	args = req->args;
+	if (req->in.h.opcode == FUSE_READDIR ||
+	    req->in.h.opcode == FUSE_READDIRPLUS)
+		pr_err("matt virtiofs: complete opcode=%u unique=%llu out_error=%d out_len=%u out_size=%u out_pages=%u\n",
+		       req->in.h.opcode, req->in.h.unique, req->out.h.error,
+		       req->out.h.len,
+		       args->out_numargs ? args->out_args[args->out_numargs - 1].size : 0,
+		       args->out_pages);
 	copy_args_from_argbuf(args, req);
 
 	if (args->out_pages && args->page_zeroing) {
@@ -1406,14 +1426,31 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 	unsigned int i, hash;
 	int ret;
 	bool notify;
+	bool dbg_readdir = req->in.h.opcode == FUSE_READDIR ||
+			   req->in.h.opcode == FUSE_READDIRPLUS;
 	struct fuse_pqueue *fpq;
 
 	/* Does the sglist fit on the stack? */
 	total_sgs = sg_count_fuse_req(req);
+	if (dbg_readdir) {
+		struct fuse_args_pages *ap = container_of(args, typeof(*ap), args);
+		struct fuse_conn *fc = req->fm->fc;
+
+		pr_err("matt virtiofs: enqueue start opcode=%u out_size=%u out_pages=%u in_pages=%u num_folios=%u total_sgs=%u max_pages=%u max_read=%u max_write=%u gfp=0x%x\n",
+		       req->in.h.opcode,
+		       args->out_numargs ? args->out_args[args->out_numargs - 1].size : 0,
+		       args->out_pages, args->in_pages, ap->num_folios,
+		       total_sgs, fc->max_pages, fc->max_read, fc->max_write,
+		       (__force unsigned int)gfp);
+	}
 	if (total_sgs > ARRAY_SIZE(stack_sgs)) {
 		sgs = kmalloc_objs(sgs[0], total_sgs, gfp);
 		sg = kmalloc_objs(sg[0], total_sgs, gfp);
 		if (!sgs || !sg) {
+			if (dbg_readdir)
+				pr_err("matt virtiofs: sg array alloc failed total_sgs=%u sgs=%p sg=%p gfp=0x%x\n",
+				       total_sgs, sgs, sg,
+				       (__force unsigned int)gfp);
 			ret = -ENOMEM;
 			goto out;
 		}
@@ -1421,8 +1458,12 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 
 	/* Use a bounce buffer since stack args cannot be mapped */
 	ret = copy_args_to_argbuf(req, gfp);
-	if (ret < 0)
+	if (ret < 0) {
+		if (dbg_readdir)
+			pr_err("matt virtiofs: copy_args_to_argbuf failed ret=%d\n",
+			       ret);
 		goto out;
+	}
 
 	/* Request elements */
 	sg_init_one(&sg[out_sgs++], &req->in.h, sizeof(req->in.h));
@@ -1455,11 +1496,22 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 	}
 
 	vq = fsvq->vq;
+	if (dbg_readdir)
+		pr_err("matt virtiofs: before virtqueue_add_sgs total_sgs=%u out_sgs=%u in_sgs=%u argbuf_used=%u vq_num_free=%u vq_num_max=%u\n",
+		       total_sgs, out_sgs, in_sgs, argbuf_used,
+		       vq->num_free, vq->num_max);
 	ret = virtqueue_add_sgs(vq, sgs, out_sgs, in_sgs, req, GFP_ATOMIC);
 	if (ret < 0) {
+		if (dbg_readdir)
+			pr_err("matt virtiofs: virtqueue_add_sgs failed ret=%d total_sgs=%u out_sgs=%u in_sgs=%u vq_num_free=%u vq_num_max=%u\n",
+			       ret, total_sgs, out_sgs, in_sgs,
+			       vq->num_free, vq->num_max);
 		spin_unlock(&fsvq->lock);
 		goto out;
 	}
+	if (dbg_readdir)
+		pr_err("matt virtiofs: virtqueue_add_sgs ok total_sgs=%u out_sgs=%u in_sgs=%u\n",
+		       total_sgs, out_sgs, in_sgs);
 
 	/* Request successfully sent. */
 	fpq = &fsvq->fud->pq;

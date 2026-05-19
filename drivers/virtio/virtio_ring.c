@@ -632,9 +632,16 @@ static inline int virtqueue_add_split(struct vring_virtqueue *vq,
 
 	head = vq->free_head;
 
-	if (virtqueue_use_indirect(vq, total_sg))
+	if (virtqueue_use_indirect(vq, total_sg)) {
 		desc = alloc_indirect_split(vq, total_sg, gfp);
-	else {
+		if (!desc)
+			dev_err_ratelimited(&vq->vq.vdev->dev,
+					    "%s: matt virtqueue split indirect alloc failed total_sg=%u out_sgs=%u in_sgs=%u num_free=%u num_max=%u gfp=0x%x\n",
+					    vq->vq.name, total_sg, out_sgs,
+					    in_sgs, vq->vq.num_free,
+					    vq->vq.num_max,
+					    (__force unsigned int)gfp);
+	} else {
 		desc = NULL;
 		WARN_ON_ONCE(total_sg > vq->split.vring.num && !vq->indirect);
 	}
@@ -771,6 +778,12 @@ static inline int virtqueue_add_split(struct vring_virtqueue *vq,
 
 unmap_release:
 	err_idx = i;
+	dev_err_ratelimited(&vq->vq.vdev->dev,
+			    "%s: matt virtqueue split map failed indirect=%u total_sg=%u out_sgs=%u in_sgs=%u sg_count=%u err_idx=%u num_free=%u num_max=%u use_map_api=%u gfp=0x%x\n",
+			    vq->vq.name, indirect, total_sg, out_sgs, in_sgs,
+			    sg_count, err_idx, vq->vq.num_free,
+			    vq->vq.num_max, vq->use_map_api,
+			    (__force unsigned int)gfp);
 
 	if (indirect)
 		i = 0;
@@ -1503,8 +1516,14 @@ static int virtqueue_add_indirect_packed(struct vring_virtqueue *vq,
 
 	head = vq->packed.next_avail_idx;
 	desc = alloc_indirect_packed(total_sg, gfp);
-	if (!desc)
+	if (!desc) {
+		dev_err_ratelimited(&vq->vq.vdev->dev,
+				    "%s: matt virtqueue packed indirect alloc failed total_sg=%u out_sgs=%u in_sgs=%u num_free=%u num_max=%u gfp=0x%x\n",
+				    vq->vq.name, total_sg, out_sgs, in_sgs,
+				    vq->vq.num_free, vq->vq.num_max,
+				    (__force unsigned int)gfp);
 		return -ENOMEM;
+	}
 
 	extra = (struct vring_desc_extra *)&desc[total_sg];
 
@@ -1521,8 +1540,17 @@ static int virtqueue_add_indirect_packed(struct vring_virtqueue *vq,
 		for (sg = sgs[n]; sg; sg = sg_next(sg)) {
 			if (vring_map_one_sg(vq, sg, n < out_sgs ?
 					     DMA_TO_DEVICE : DMA_FROM_DEVICE,
-					     &addr, &len, premapped, attr))
+					     &addr, &len, premapped, attr)) {
+				dev_err_ratelimited(&vq->vq.vdev->dev,
+						    "%s: matt virtqueue packed indirect sg map failed total_sg=%u out_sgs=%u in_sgs=%u n=%u i=%u num_free=%u num_max=%u use_map_api=%u gfp=0x%x\n",
+						    vq->vq.name, total_sg,
+						    out_sgs, in_sgs, n, i,
+						    vq->vq.num_free,
+						    vq->vq.num_max,
+						    vq->use_map_api,
+						    (__force unsigned int)gfp);
 				goto unmap_release;
+			}
 
 			desc[i].flags = cpu_to_le16(n < out_sgs ?
 						0 : VRING_DESC_F_WRITE);
@@ -1545,8 +1573,15 @@ static int virtqueue_add_indirect_packed(struct vring_virtqueue *vq,
 	addr = vring_map_single(vq, desc,
 			total_sg * sizeof(struct vring_packed_desc),
 			DMA_TO_DEVICE);
-	if (vring_mapping_error(vq, addr))
+	if (vring_mapping_error(vq, addr)) {
+		dev_err_ratelimited(&vq->vq.vdev->dev,
+				    "%s: matt virtqueue packed indirect desc map failed total_sg=%u out_sgs=%u in_sgs=%u desc_bytes=%zu num_free=%u num_max=%u use_map_api=%u gfp=0x%x\n",
+				    vq->vq.name, total_sg, out_sgs, in_sgs,
+				    total_sg * sizeof(struct vring_packed_desc),
+				    vq->vq.num_free, vq->vq.num_max,
+				    vq->use_map_api, (__force unsigned int)gfp);
 		goto unmap_release;
+	}
 
 	vq->packed.vring.desc[head].addr = cpu_to_le64(addr);
 	vq->packed.vring.desc[head].len = cpu_to_le32(total_sg *
