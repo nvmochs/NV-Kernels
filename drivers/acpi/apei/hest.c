@@ -23,6 +23,7 @@
 #include <linux/highmem.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
+#include <linux/unaligned.h>
 #include <acpi/apei.h>
 #include <acpi/ghes.h>
 
@@ -32,6 +33,44 @@
 
 int hest_disable;
 EXPORT_SYMBOL_GPL(hest_disable);
+
+static void __init hest_debug_print_gar(u16 source, const char *name,
+					struct acpi_generic_address *reg)
+{
+	pr_info(HEST_PFX
+		"GHES debug: source=%u %s space=%u width=%u offset=%u access=%u addr=0x%llx\n",
+		source, name, reg->space_id, reg->bit_width, reg->bit_offset,
+		reg->access_width,
+		(unsigned long long)get_unaligned(&reg->address));
+}
+
+static void __init hest_debug_print_ghes(struct acpi_hest_generic *generic)
+{
+	struct acpi_hest_generic_v2 *generic_v2;
+
+	pr_info(HEST_PFX
+		"GHES debug: source=%u type=%u related=%u enabled=%u prealloc=%u max_sections=%u max_raw=0x%x notify_type=%u vector=0x%x block_len=0x%x\n",
+		generic->header.source_id, generic->header.type,
+		generic->related_source_id, generic->enabled,
+		generic->records_to_preallocate,
+		generic->max_sections_per_record,
+		generic->max_raw_data_length, generic->notify.type,
+		generic->notify.vector, generic->error_block_length);
+	hest_debug_print_gar(generic->header.source_id, "error_status",
+			     &generic->error_status_address);
+
+	if (generic->header.type != ACPI_HEST_TYPE_GENERIC_ERROR_V2)
+		return;
+
+	generic_v2 = (struct acpi_hest_generic_v2 *)generic;
+	hest_debug_print_gar(generic->header.source_id, "read_ack",
+			     &generic_v2->read_ack_register);
+	pr_info(HEST_PFX
+		"GHES debug: source=%u read_ack_preserve=0x%llx read_ack_write=0x%llx\n",
+		generic->header.source_id,
+		(unsigned long long)generic_v2->read_ack_preserve,
+		(unsigned long long)generic_v2->read_ack_write);
+}
 
 /* HEST table parsing */
 
@@ -213,6 +252,8 @@ static int __init hest_parse_ghes(struct acpi_hest_header *hest_hdr, void *data)
 	if (!is_generic_error(hest_hdr))
 		return 0;
 
+	hest_debug_print_ghes((struct acpi_hest_generic *)hest_hdr);
+
 	if (!((struct acpi_hest_generic *)hest_hdr)->enabled)
 		return 0;
 	for (i = 0; i < ghes_arr->count; i++) {
@@ -250,18 +291,34 @@ static int __init hest_ghes_dev_register(unsigned int ghes_count)
 	struct ghes_arr ghes_arr;
 
 	ghes_arr.count = 0;
+	pr_info(HEST_PFX "GHES debug: registering up to %u GHES devices\n",
+		ghes_count);
 	ghes_arr.ghes_devs = kmalloc_array(ghes_count, sizeof(void *),
 					   GFP_KERNEL);
-	if (!ghes_arr.ghes_devs)
+	if (!ghes_arr.ghes_devs) {
+		pr_warn(HEST_PFX "GHES debug: failed to allocate GHES device array\n");
 		return -ENOMEM;
+	}
 
 	rc = apei_hest_parse(hest_parse_ghes, &ghes_arr);
-	if (rc)
+	if (rc) {
+		pr_warn(HEST_PFX
+			"GHES debug: HEST GHES platform registration failed after %u devices: %d\n",
+			ghes_arr.count, rc);
 		goto err;
+	}
+	pr_info(HEST_PFX "GHES debug: registered %u enabled GHES devices\n",
+		ghes_arr.count);
 
 	rc = ghes_estatus_pool_init(ghes_count);
-	if (rc)
+	if (rc) {
+		pr_warn(HEST_PFX
+			"GHES debug: ghes_estatus_pool_init(%u) failed: %d\n",
+			ghes_count, rc);
 		goto err;
+	}
+	pr_info(HEST_PFX "GHES debug: estatus pool initialized for %u GHES entries\n",
+		ghes_count);
 
 out:
 	kfree(ghes_arr.ghes_devs);

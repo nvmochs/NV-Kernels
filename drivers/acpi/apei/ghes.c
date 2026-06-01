@@ -38,6 +38,7 @@
 #include <linux/kfifo.h>
 #include <linux/pci.h>
 #include <linux/pfn.h>
+#include <linux/unaligned.h>
 #include <linux/aer.h>
 #include <linux/nmi.h>
 #include <linux/sched/clock.h>
@@ -103,6 +104,45 @@ static ATOMIC_NOTIFIER_HEAD(ghes_report_chain);
 static inline bool is_hest_type_generic_v2(struct ghes *ghes)
 {
 	return ghes->generic->header.type == ACPI_HEST_TYPE_GENERIC_ERROR_V2;
+}
+
+static void ghes_debug_print_gar(u16 source, const char *name,
+				 struct acpi_generic_address *reg)
+{
+	pr_info(GHES_PFX
+		"debug: source=%u %s space=%u width=%u offset=%u access=%u addr=0x%llx\n",
+		source, name, reg->space_id, reg->bit_width, reg->bit_offset,
+		reg->access_width,
+		(unsigned long long)get_unaligned(&reg->address));
+}
+
+static void ghes_debug_print_generic(const char *stage,
+				     struct acpi_hest_generic *generic)
+{
+	struct acpi_hest_generic_v2 *generic_v2;
+
+	pr_info(GHES_PFX
+		"debug: %s source=%u hest_type=%u enabled=%u related=%u notify_type=%u vector=0x%x block_len=0x%x max_raw=0x%x records=%u max_sections=%u\n",
+		stage, generic->header.source_id, generic->header.type,
+		generic->enabled, generic->related_source_id,
+		generic->notify.type, generic->notify.vector,
+		generic->error_block_length, generic->max_raw_data_length,
+		generic->records_to_preallocate,
+		generic->max_sections_per_record);
+	ghes_debug_print_gar(generic->header.source_id, "error_status",
+			     &generic->error_status_address);
+
+	if (generic->header.type != ACPI_HEST_TYPE_GENERIC_ERROR_V2)
+		return;
+
+	generic_v2 = (struct acpi_hest_generic_v2 *)generic;
+	ghes_debug_print_gar(generic->header.source_id, "read_ack",
+			     &generic_v2->read_ack_register);
+	pr_info(GHES_PFX
+		"debug: source=%u read_ack_preserve=0x%llx read_ack_write=0x%llx\n",
+		generic->header.source_id,
+		(unsigned long long)generic_v2->read_ack_preserve,
+		(unsigned long long)generic_v2->read_ack_write);
 }
 
 /*
@@ -276,14 +316,32 @@ static struct ghes *ghes_new(struct acpi_hest_generic *generic)
 
 	ghes->generic = generic;
 	if (is_hest_type_generic_v2(ghes)) {
+		pr_info(GHES_PFX
+			"debug: source=%u mapping GHESv2 read_ack register\n",
+			generic->header.source_id);
 		rc = map_gen_v2(ghes);
-		if (rc)
+		if (rc) {
+			pr_warn(GHES_PFX
+				"debug: source=%u failed to map GHESv2 read_ack register: %d\n",
+				generic->header.source_id, rc);
 			goto err_free;
+		}
+		pr_info(GHES_PFX
+			"debug: source=%u mapped GHESv2 read_ack register\n",
+			generic->header.source_id);
 	}
 
+	pr_info(GHES_PFX "debug: source=%u mapping error_status address\n",
+		generic->header.source_id);
 	rc = apei_map_generic_address(&generic->error_status_address);
-	if (rc)
+	if (rc) {
+		pr_warn(GHES_PFX
+			"debug: source=%u failed to map error_status address: %d\n",
+			generic->header.source_id, rc);
 		goto err_unmap_read_ack_addr;
+	}
+	pr_info(GHES_PFX "debug: source=%u mapped error_status address\n",
+		generic->header.source_id);
 	error_block_length = generic->error_block_length;
 	if (error_block_length > GHES_ESTATUS_MAX_SIZE) {
 		pr_warn(FW_WARN GHES_PFX
@@ -297,6 +355,9 @@ static struct ghes *ghes_new(struct acpi_hest_generic *generic)
 		rc = -ENOMEM;
 		goto err_unmap_status_addr;
 	}
+	pr_info(GHES_PFX
+		"debug: source=%u allocated estatus buffer length=0x%x\n",
+		generic->header.source_id, error_block_length);
 
 	return ghes;
 
@@ -1534,8 +1595,12 @@ static int ghes_probe(struct platform_device *ghes_dev)
 	int rc = -EINVAL;
 
 	generic = *(struct acpi_hest_generic **)ghes_dev->dev.platform_data;
-	if (!generic->enabled)
+	ghes_debug_print_generic("probe entry", generic);
+	if (!generic->enabled) {
+		pr_info(GHES_PFX "debug: source=%u disabled, skipping probe\n",
+			generic->header.source_id);
 		return -ENODEV;
+	}
 
 	switch (generic->notify.type) {
 	case ACPI_HEST_NOTIFY_POLLED:
@@ -1576,6 +1641,10 @@ static int ghes_probe(struct platform_device *ghes_dev)
 			generic->notify.type, generic->header.source_id);
 		goto err;
 	}
+	pr_info(GHES_PFX
+		"debug: source=%u notify_type=%u vector=0x%x accepted\n",
+		generic->header.source_id, generic->notify.type,
+		generic->notify.vector);
 
 	rc = -EIO;
 	if (generic->error_block_length <
@@ -1584,12 +1653,18 @@ static int ghes_probe(struct platform_device *ghes_dev)
 			generic->error_block_length, generic->header.source_id);
 		goto err;
 	}
+	pr_info(GHES_PFX "debug: source=%u error block length 0x%x accepted\n",
+		generic->header.source_id, generic->error_block_length);
 	ghes = ghes_new(generic);
 	if (IS_ERR(ghes)) {
 		rc = PTR_ERR(ghes);
 		ghes = NULL;
+		pr_warn(GHES_PFX "debug: source=%u ghes_new failed: %d\n",
+			generic->header.source_id, rc);
 		goto err;
 	}
+	pr_info(GHES_PFX "debug: source=%u ghes_new succeeded\n",
+		generic->header.source_id);
 
 	switch (generic->notify.type) {
 	case ACPI_HEST_NOTIFY_POLLED:
@@ -1602,15 +1677,28 @@ static int ghes_probe(struct platform_device *ghes_dev)
 		if (rc) {
 			pr_err(GHES_PFX "Failed to map GSI to IRQ for generic hardware error source: %d\n",
 			       generic->header.source_id);
+			pr_warn(GHES_PFX
+				"debug: source=%u vector=0x%x acpi_gsi_to_irq failed: %d\n",
+				generic->header.source_id, generic->notify.vector,
+				rc);
 			goto err;
 		}
+		pr_info(GHES_PFX
+			"debug: source=%u vector=0x%x mapped to irq=%u\n",
+			generic->header.source_id, generic->notify.vector,
+			ghes->irq);
 		rc = request_irq(ghes->irq, ghes_irq_func, IRQF_SHARED,
 				 "GHES IRQ", ghes);
 		if (rc) {
 			pr_err(GHES_PFX "Failed to register IRQ for generic hardware error source: %d\n",
 			       generic->header.source_id);
+			pr_warn(GHES_PFX
+				"debug: source=%u irq=%u request_irq failed: %d\n",
+				generic->header.source_id, ghes->irq, rc);
 			goto err;
 		}
+		pr_info(GHES_PFX "debug: source=%u registered irq=%u\n",
+			generic->header.source_id, ghes->irq);
 		break;
 
 	case ACPI_HEST_NOTIFY_SCI:
@@ -1621,18 +1709,36 @@ static int ghes_probe(struct platform_device *ghes_dev)
 			register_acpi_hed_notifier(&ghes_notifier_hed);
 		list_add_rcu(&ghes->list, &ghes_hed);
 		mutex_unlock(&ghes_list_mutex);
+		pr_info(GHES_PFX
+			"debug: source=%u registered HED notifier path notify_type=%u\n",
+			generic->header.source_id, generic->notify.type);
 		break;
 
 	case ACPI_HEST_NOTIFY_SEA:
 		ghes_sea_add(ghes);
+		pr_info(GHES_PFX "debug: source=%u added SEA notifier\n",
+			generic->header.source_id);
 		break;
 	case ACPI_HEST_NOTIFY_NMI:
 		ghes_nmi_add(ghes);
+		pr_info(GHES_PFX "debug: source=%u added NMI notifier\n",
+			generic->header.source_id);
 		break;
 	case ACPI_HEST_NOTIFY_SOFTWARE_DELEGATED:
+		pr_info(GHES_PFX
+			"debug: source=%u registering software delegated SDEI event=0x%x\n",
+			generic->header.source_id, generic->notify.vector);
 		rc = apei_sdei_register_ghes(ghes);
-		if (rc)
+		if (rc) {
+			pr_warn(GHES_PFX
+				"debug: source=%u SDEI event=0x%x registration failed: %d\n",
+				generic->header.source_id, generic->notify.vector,
+				rc);
 			goto err;
+		}
+		pr_info(GHES_PFX
+			"debug: source=%u registered SDEI event=0x%x\n",
+			generic->header.source_id, generic->notify.vector);
 		break;
 	default:
 		BUG();
@@ -1645,15 +1751,25 @@ static int ghes_probe(struct platform_device *ghes_dev)
 	mutex_lock(&ghes_devs_mutex);
 	list_add_tail(&ghes->elist, &ghes_devs);
 	mutex_unlock(&ghes_devs_mutex);
+	pr_info(GHES_PFX "debug: source=%u probe registration complete\n",
+		generic->header.source_id);
 
 	/* Handle any pending errors right away */
+	pr_info(GHES_PFX "debug: source=%u checking pending errors\n",
+		generic->header.source_id);
 	spin_lock_irqsave(&ghes_notify_lock_irq, flags);
 	ghes_proc(ghes);
 	spin_unlock_irqrestore(&ghes_notify_lock_irq, flags);
+	pr_info(GHES_PFX "debug: source=%u probe complete\n",
+		generic->header.source_id);
 
 	return 0;
 
 err:
+	pr_warn(GHES_PFX
+		"debug: source=%u probe failed rc=%d notify_type=%u vector=0x%x ghes_allocated=%u\n",
+		generic->header.source_id, rc, generic->notify.type,
+		generic->notify.vector, !!ghes);
 	if (ghes) {
 		ghes_fini(ghes);
 		kfree(ghes);

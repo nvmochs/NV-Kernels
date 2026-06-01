@@ -627,15 +627,38 @@ int apei_map_generic_address(struct acpi_generic_address *reg)
 	u64 address;
 
 	rc = apei_check_gar(reg, &address, &access_bit_width);
-	if (rc)
+	if (rc) {
+		pr_warn(APEI_PFX
+			"debug: GAR map rejected rc=%d space=%u width=%u offset=%u access=%u addr=0x%llx\n",
+			rc, reg->space_id, reg->bit_width, reg->bit_offset,
+			reg->access_width, (unsigned long long)address);
 		return rc;
+	}
+
+	pr_info(APEI_PFX
+		"debug: GAR map request space=%u width=%u offset=%u access=%u addr=0x%llx access_bits=%u\n",
+		reg->space_id, reg->bit_width, reg->bit_offset,
+		reg->access_width, (unsigned long long)address,
+		access_bit_width);
 
 	/* IO space doesn't need mapping */
-	if (reg->space_id == ACPI_ADR_SPACE_SYSTEM_IO)
+	if (reg->space_id == ACPI_ADR_SPACE_SYSTEM_IO) {
+		pr_info(APEI_PFX
+			"debug: GAR map skipped for SystemIO addr=0x%llx\n",
+			(unsigned long long)address);
 		return 0;
+	}
 
-	if (!acpi_os_map_generic_address(reg))
+	if (!acpi_os_map_generic_address(reg)) {
+		pr_warn(APEI_PFX
+			"debug: GAR SystemMemory map failed addr=0x%llx\n",
+			(unsigned long long)address);
 		return -ENXIO;
+	}
+
+	pr_info(APEI_PFX
+		"debug: GAR SystemMemory map succeeded addr=0x%llx\n",
+		(unsigned long long)address);
 
 	return 0;
 }

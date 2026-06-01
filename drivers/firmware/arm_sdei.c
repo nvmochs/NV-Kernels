@@ -194,6 +194,46 @@ static int sdei_api_event_get_info(u32 event, u32 info, u64 *result)
 			      0, 0, result);
 }
 
+static int sdei_debug_event_call(u32 event, unsigned long function_id,
+				 unsigned long arg1, unsigned long arg2,
+				 unsigned long arg3, unsigned long arg4,
+				 const char *stage)
+{
+	u64 result = 0;
+	int err;
+
+	err = invoke_sdei_fn(function_id, event, arg1, arg2, arg3, arg4,
+			     &result);
+	if (err) {
+		pr_warn("debug: event=%u/0x%x stage=%s failed err=%d raw=0x%llx\n",
+			event, event, stage, err, (unsigned long long)result);
+		return err;
+	}
+
+	pr_info("debug: event=%u/0x%x stage=%s succeeded raw=0x%llx\n",
+		event, event, stage, (unsigned long long)result);
+	return 0;
+}
+
+static int sdei_debug_event_get_info(u32 event, u32 info, u64 *result,
+				     const char *stage)
+{
+	int err;
+
+	err = sdei_api_event_get_info(event, info, result);
+	if (err) {
+		pr_warn("debug: event=%u/0x%x stage=%s GET_INFO info=%u failed err=%d raw=0x%llx\n",
+			event, event, stage, info, err,
+			(unsigned long long)*result);
+		return err;
+	}
+
+	pr_info("debug: event=%u/0x%x stage=%s GET_INFO info=%u result=%llu/0x%llx\n",
+		event, event, stage, info, (unsigned long long)*result,
+		(unsigned long long)*result);
+	return 0;
+}
+
 static struct sdei_event *sdei_event_create(u32 event_num,
 					    sdei_event_callback *cb,
 					    void *cb_arg)
@@ -214,17 +254,21 @@ static struct sdei_event *sdei_event_create(u32 event_num,
 	INIT_LIST_HEAD(&event->list);
 	event->event_num = event_num;
 
-	err = sdei_api_event_get_info(event_num, SDEI_EVENT_INFO_EV_PRIORITY,
-				      &result);
+	result = 0;
+	err = sdei_debug_event_get_info(event_num, SDEI_EVENT_INFO_EV_PRIORITY,
+					&result, "create-priority");
 	if (err)
 		goto fail;
 	event->priority = result;
 
-	err = sdei_api_event_get_info(event_num, SDEI_EVENT_INFO_EV_TYPE,
-				      &result);
+	result = 0;
+	err = sdei_debug_event_get_info(event_num, SDEI_EVENT_INFO_EV_TYPE,
+					&result, "create-type");
 	if (err)
 		goto fail;
 	event->type = result;
+	pr_info("debug: event=%u/0x%x create priority=%u type=%u\n",
+		event_num, event_num, event->priority, event->type);
 
 	if (event->type == SDEI_EVENT_TYPE_SHARED) {
 		reg = kzalloc(sizeof(*reg), GFP_KERNEL);
@@ -264,10 +308,14 @@ static struct sdei_event *sdei_event_create(u32 event_num,
 	spin_lock(&sdei_list_lock);
 	list_add(&event->list, &sdei_list);
 	spin_unlock(&sdei_list_lock);
+	pr_info("debug: event=%u/0x%x created and added to SDEI list\n",
+		event_num, event_num);
 
 	return event;
 
 fail:
+	pr_warn("debug: event=%u/0x%x create failed err=%d\n",
+		event_num, event_num, err);
 	kfree(event);
 	return ERR_PTR(err);
 }
@@ -381,8 +429,8 @@ static int sdei_platform_reset(void)
 
 static int sdei_api_event_enable(u32 event_num)
 {
-	return invoke_sdei_fn(SDEI_1_0_FN_SDEI_EVENT_ENABLE, event_num, 0, 0, 0,
-			      0, NULL);
+	return sdei_debug_event_call(event_num, SDEI_1_0_FN_SDEI_EVENT_ENABLE,
+				     0, 0, 0, 0, "EVENT_ENABLE");
 }
 
 /* Called directly by the hotplug callbacks */
@@ -404,12 +452,15 @@ int sdei_event_enable(u32 event_num)
 	mutex_lock(&sdei_events_lock);
 	event = sdei_event_find(event_num);
 	if (!event) {
+		pr_warn("debug: event=%u/0x%x enable failed: event not found\n",
+			event_num, event_num);
 		mutex_unlock(&sdei_events_lock);
 		return -ENOENT;
 	}
 
-
 	cpus_read_lock();
+	pr_info("debug: event=%u/0x%x enabling type=%u priority=%u\n",
+		event_num, event_num, event->type, event->priority);
 	if (event->type == SDEI_EVENT_TYPE_SHARED)
 		err = sdei_api_event_enable(event->event_num);
 	else
@@ -422,14 +473,20 @@ int sdei_event_enable(u32 event_num)
 	}
 	cpus_read_unlock();
 	mutex_unlock(&sdei_events_lock);
+	if (err)
+		pr_warn("debug: event=%u/0x%x enable failed err=%d\n",
+			event_num, event_num, err);
+	else
+		pr_info("debug: event=%u/0x%x enable succeeded\n",
+			event_num, event_num);
 
 	return err;
 }
 
 static int sdei_api_event_disable(u32 event_num)
 {
-	return invoke_sdei_fn(SDEI_1_0_FN_SDEI_EVENT_DISABLE, event_num, 0, 0,
-			      0, 0, NULL);
+	return sdei_debug_event_call(event_num, SDEI_1_0_FN_SDEI_EVENT_DISABLE,
+				     0, 0, 0, 0, "EVENT_DISABLE");
 }
 
 static void _ipi_event_disable(void *data)
@@ -450,6 +507,8 @@ int sdei_event_disable(u32 event_num)
 	mutex_lock(&sdei_events_lock);
 	event = sdei_event_find(event_num);
 	if (!event) {
+		pr_warn("debug: event=%u/0x%x disable failed: event not found\n",
+			event_num, event_num);
 		mutex_unlock(&sdei_events_lock);
 		return -ENOENT;
 	}
@@ -458,19 +517,28 @@ int sdei_event_disable(u32 event_num)
 	event->reenable = false;
 	spin_unlock(&sdei_list_lock);
 
+	pr_info("debug: event=%u/0x%x disabling type=%u priority=%u\n",
+		event_num, event_num, event->type, event->priority);
 	if (event->type == SDEI_EVENT_TYPE_SHARED)
 		err = sdei_api_event_disable(event->event_num);
 	else
 		err = sdei_do_cross_call(_ipi_event_disable, event);
 	mutex_unlock(&sdei_events_lock);
+	if (err)
+		pr_warn("debug: event=%u/0x%x disable failed err=%d\n",
+			event_num, event_num, err);
+	else
+		pr_info("debug: event=%u/0x%x disable succeeded\n",
+			event_num, event_num);
 
 	return err;
 }
 
 static int sdei_api_event_unregister(u32 event_num)
 {
-	return invoke_sdei_fn(SDEI_1_0_FN_SDEI_EVENT_UNREGISTER, event_num, 0,
-			      0, 0, 0, NULL);
+	return sdei_debug_event_call(event_num,
+				     SDEI_1_0_FN_SDEI_EVENT_UNREGISTER,
+				     0, 0, 0, 0, "EVENT_UNREGISTER");
 }
 
 /* Called directly by the hotplug callbacks */
@@ -495,6 +563,8 @@ int sdei_event_unregister(u32 event_num)
 	event = sdei_event_find(event_num);
 	if (!event) {
 		pr_warn("Event %u not registered\n", event_num);
+		pr_warn("debug: event=%u/0x%x unregister failed: event not found\n",
+			event_num, event_num);
 		err = -ENOENT;
 		goto unlock;
 	}
@@ -504,15 +574,22 @@ int sdei_event_unregister(u32 event_num)
 	event->reenable = false;
 	spin_unlock(&sdei_list_lock);
 
+	pr_info("debug: event=%u/0x%x unregistering type=%u priority=%u\n",
+		event_num, event_num, event->type, event->priority);
 	if (event->type == SDEI_EVENT_TYPE_SHARED)
 		err = sdei_api_event_unregister(event->event_num);
 	else
 		err = sdei_do_cross_call(_local_event_unregister, event);
 
-	if (err)
+	if (err) {
+		pr_warn("debug: event=%u/0x%x unregister failed err=%d\n",
+			event_num, event_num, err);
 		goto unlock;
+	}
 
 	sdei_event_destroy(event);
+	pr_info("debug: event=%u/0x%x unregister succeeded\n",
+		event_num, event_num);
 unlock:
 	mutex_unlock(&sdei_events_lock);
 
@@ -547,9 +624,10 @@ static int sdei_unregister_shared(void)
 static int sdei_api_event_register(u32 event_num, unsigned long entry_point,
 				   void *arg, u64 flags, u64 affinity)
 {
-	return invoke_sdei_fn(SDEI_1_0_FN_SDEI_EVENT_REGISTER, event_num,
-			      (unsigned long)entry_point, (unsigned long)arg,
-			      flags, affinity, NULL);
+	return sdei_debug_event_call(event_num,
+				     SDEI_1_0_FN_SDEI_EVENT_REGISTER,
+				     entry_point, (unsigned long)arg, flags,
+				     affinity, "EVENT_REGISTER");
 }
 
 /* Called directly by the hotplug callbacks */
@@ -572,10 +650,14 @@ int sdei_event_register(u32 event_num, sdei_event_callback *cb, void *arg)
 	struct sdei_event *event;
 
 	WARN_ON(in_nmi());
+	pr_info("debug: event=%u/0x%x register requested\n",
+		event_num, event_num);
 
 	mutex_lock(&sdei_events_lock);
 	if (sdei_event_find(event_num)) {
 		pr_warn("Event %u already registered\n", event_num);
+		pr_warn("debug: event=%u/0x%x register failed: already registered\n",
+			event_num, event_num);
 		err = -EBUSY;
 		goto unlock;
 	}
@@ -584,10 +666,14 @@ int sdei_event_register(u32 event_num, sdei_event_callback *cb, void *arg)
 	if (IS_ERR(event)) {
 		err = PTR_ERR(event);
 		pr_warn("Failed to create event %u: %d\n", event_num, err);
+		pr_warn("debug: event=%u/0x%x register failed during create: %d\n",
+			event_num, event_num, err);
 		goto unlock;
 	}
 
 	cpus_read_lock();
+	pr_info("debug: event=%u/0x%x registering type=%u priority=%u\n",
+		event_num, event_num, event->type, event->priority);
 	if (event->type == SDEI_EVENT_TYPE_SHARED) {
 		err = sdei_api_event_register(event->event_num,
 					      sdei_entry_point,
@@ -602,16 +688,22 @@ int sdei_event_register(u32 event_num, sdei_event_callback *cb, void *arg)
 	if (err) {
 		sdei_event_destroy(event);
 		pr_warn("Failed to register event %u: %d\n", event_num, err);
+		pr_warn("debug: event=%u/0x%x firmware register failed err=%d\n",
+			event_num, event_num, err);
 		goto cpu_unlock;
 	}
 
 	spin_lock(&sdei_list_lock);
 	event->reregister = true;
 	spin_unlock(&sdei_list_lock);
+	pr_info("debug: event=%u/0x%x register succeeded\n",
+		event_num, event_num);
 cpu_unlock:
 	cpus_read_unlock();
 unlock:
 	mutex_unlock(&sdei_events_lock);
+	pr_info("debug: event=%u/0x%x register returning %d\n",
+		event_num, event_num, err);
 	return err;
 }
 
@@ -865,27 +957,56 @@ int sdei_register_ghes(struct ghes *ghes, sdei_event_callback *normal_cb,
 		return -EOPNOTSUPP;
 
 	event_num = ghes->generic->notify.vector;
+	pr_info("debug: GHES source=%u registering event=%u/0x%x notify_type=%u\n",
+		ghes->generic->header.source_id, event_num, event_num,
+		ghes->generic->notify.type);
 	if (event_num == 0) {
 		/*
 		 * Event 0 is reserved by the specification for
 		 * SDEI_EVENT_SIGNAL.
 		 */
+		pr_warn("debug: GHES source=%u has reserved SDEI event 0\n",
+			ghes->generic->header.source_id);
 		return -EINVAL;
 	}
 
-	err = sdei_api_event_get_info(event_num, SDEI_EVENT_INFO_EV_PRIORITY,
-				      &result);
-	if (err)
+	result = 0;
+	err = sdei_debug_event_get_info(event_num, SDEI_EVENT_INFO_EV_PRIORITY,
+					&result, "ghes-priority");
+	if (err) {
+		pr_warn("debug: GHES source=%u event=%u/0x%x priority lookup failed err=%d\n",
+			ghes->generic->header.source_id, event_num, event_num,
+			err);
 		return err;
+	}
 
-	if (result == SDEI_EVENT_PRIORITY_CRITICAL)
+	if (result == SDEI_EVENT_PRIORITY_CRITICAL) {
 		cb = critical_cb;
-	else
+		pr_info("debug: GHES source=%u event=%u/0x%x using critical callback\n",
+			ghes->generic->header.source_id, event_num, event_num);
+	} else {
 		cb = normal_cb;
+		pr_info("debug: GHES source=%u event=%u/0x%x using normal callback priority=%llu\n",
+			ghes->generic->header.source_id, event_num, event_num,
+			(unsigned long long)result);
+	}
 
 	err = sdei_event_register(event_num, cb, ghes);
-	if (!err)
-		err = sdei_event_enable(event_num);
+	if (err) {
+		pr_warn("debug: GHES source=%u event=%u/0x%x register failed err=%d\n",
+			ghes->generic->header.source_id, event_num, event_num,
+			err);
+		return err;
+	}
+
+	err = sdei_event_enable(event_num);
+	if (err)
+		pr_warn("debug: GHES source=%u event=%u/0x%x enable failed err=%d\n",
+			ghes->generic->header.source_id, event_num, event_num,
+			err);
+	else
+		pr_info("debug: GHES source=%u event=%u/0x%x register+enable succeeded\n",
+			ghes->generic->header.source_id, event_num, event_num);
 
 	return err;
 }
@@ -901,16 +1022,26 @@ int sdei_unregister_ghes(struct ghes *ghes)
 	if (!IS_ENABLED(CONFIG_ACPI_APEI_GHES))
 		return -EOPNOTSUPP;
 
+	pr_info("debug: GHES source=%u unregistering event=%u/0x%x\n",
+		ghes->generic->header.source_id, event_num, event_num);
+
 	/*
 	 * The event may be running on another CPU. Disable it
 	 * to stop new events, then try to unregister a few times.
 	 */
 	err = sdei_event_disable(event_num);
-	if (err)
+	if (err) {
+		pr_warn("debug: GHES source=%u event=%u/0x%x disable before unregister failed err=%d\n",
+			ghes->generic->header.source_id, event_num, event_num,
+			err);
 		return err;
+	}
 
 	for (i = 0; i < 3; i++) {
 		err = sdei_event_unregister(event_num);
+		pr_info("debug: GHES source=%u event=%u/0x%x unregister attempt=%d err=%d\n",
+			ghes->generic->header.source_id, event_num, event_num,
+			i + 1, err);
 		if (err != -EINPROGRESS)
 			break;
 
