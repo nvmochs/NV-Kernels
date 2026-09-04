@@ -29,7 +29,7 @@ EXPORT_SYMBOL_FOR_MODULES(cxl_rwsem, "cxl_core");
 
 static void cxld_set_interleave(struct cxl_decoder_settings *settings, u32 *ctrl)
 {
-	u16 eig;
+	u16 eig = 0;
 	u8 eiw;
 
 	/*
@@ -40,7 +40,13 @@ static void cxld_set_interleave(struct cxl_decoder_settings *settings, u32 *ctrl
 		      "invalid interleave_ways: %d\n",
 		      settings->interleave_ways))
 		return;
-	if (WARN_ONCE(granularity_to_eig(settings->interleave_granularity, &eig),
+
+	/*
+	 * A non-interleaving decoder ignores the IG field, so an unencodable
+	 * granularity is a don't-care rather than a failure.
+	 */
+	if (granularity_to_eig(settings->interleave_granularity, &eig) &&
+	    WARN_ONCE(settings->interleave_ways > 1,
 		      "invalid interleave_granularity: %d\n",
 		      settings->interleave_granularity))
 		return;

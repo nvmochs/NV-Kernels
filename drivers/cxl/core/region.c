@@ -1523,6 +1523,20 @@ static inline u64 get_selector(u64 ways, u64 gran)
 	return (ways - 1) * gran;
 }
 
+/*
+ * Hardware only consults the IG field of a decoder that interleaves, so a
+ * granularity the field cannot encode only matters when @ways exceeds one.
+ */
+static bool granularity_is_valid(int ways, int granularity)
+{
+	u16 eig;
+
+	if (ways <= 1)
+		return true;
+
+	return granularity_to_eig(granularity, &eig) == 0;
+}
+
 static int cxl_port_setup_targets(struct cxl_port *port,
 				  struct cxl_region *cxlr,
 				  struct cxl_endpoint_decoder *cxled)
@@ -1539,7 +1553,6 @@ static int cxl_port_setup_targets(struct cxl_port *port,
 	int ig, iw = cxl_rr->nr_targets, rc, pos = cxled->pos;
 	int distance, parent_distance;
 	u64 selector, cxlr_sel;
-	u16 eig;
 	u8 eiw;
 
 	/*
@@ -1657,8 +1670,8 @@ static int cxl_port_setup_targets(struct cxl_port *port,
 		ig = p->interleave_granularity * parent_distance;
 
 	rc = ways_to_eiw(iw, &eiw);
-	if (!rc)
-		rc = granularity_to_eig(ig, &eig);
+	if (!rc && !granularity_is_valid(iw, ig))
+		rc = -EINVAL;
 
 	if (rc || (iw > 1 && ~selector & get_selector(iw, ig))) {
 		dev_dbg(&cxlr->dev, "%s:%s: invalid port interleave: %d:%d:%#llx\n",
