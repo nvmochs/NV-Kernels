@@ -1233,6 +1233,10 @@ static bool convert_cs_to_base(u64 *cycles, enum clocksource_ids base_id)
 	struct clocksource *cs = tk_core.timekeeper.tkr_mono.clock;
 	struct clocksource_base *base;
 
+	/* The requested base is the timekeeper clocksource */
+	if (cs->id == base_id)
+		return true;
+
 	/*
 	 * Check whether base_id matches the base clock. Prevent the compiler from
 	 * re-evaluating @base as the clocksource might change concurrently.
