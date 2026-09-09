@@ -143,9 +143,16 @@ static u64 arch_counter_read_cc(struct cyclecounter *cc)
 	return arch_timer_read_counter();
 }
 
+static struct clocksource_base arch_counter_base = {
+	.id		= CSID_ARM_ARCH_COUNTER,
+	.numerator	= 1,
+	.denominator	= 1,
+};
+
 static struct clocksource clocksource_counter = {
 	.name	= "arch_sys_counter",
 	.id	= CSID_ARM_ARCH_COUNTER,
+	.base	= &arch_counter_base,
 	.rating	= 400,
 	.read	= arch_counter_read,
 	.flags	= CLOCK_SOURCE_IS_CONTINUOUS,
@@ -938,6 +945,7 @@ static void __init arch_counter_register(void)
 	if (!arch_counter_suspend_stop)
 		clocksource_counter.flags |= CLOCK_SOURCE_SUSPEND_NONSTOP;
 	start_count = arch_timer_read_counter();
+	arch_counter_base.freq_khz = arch_timer_rate / 1000;
 	clocksource_register_hz(&clocksource_counter, arch_timer_rate);
 	cyclecounter.mult = clocksource_counter.mult;
 	cyclecounter.shift = clocksource_counter.shift;
